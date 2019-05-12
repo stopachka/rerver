@@ -1,10 +1,85 @@
 use std::io::prelude::*;
 use std::net::TcpListener;
 use std::net::TcpStream;
+use std::sync::Arc;
+use std::sync::mpsc;
+use std::sync::Mutex;
+use std::thread;
+use std::time::Duration;
+
+/*
+  Job
+*/ 
+
+trait FnBox {
+  fn call_box(self: Box<Self>);
+}
+
+impl<F: FnOnce()> FnBox for F {
+  fn call_box(self: Box<Self>) {
+    (*self)()
+  }
+}
+
+type Job = Box<FnBox + Send + 'static>;
+
+/* 
+  Worker
+*/
+
+struct Worker {
+  _thread: thread::JoinHandle<()>,
+}
+
+impl Worker {
+  fn new(
+    id: usize, 
+    receiver: Arc<Mutex<mpsc::Receiver<Job>>>
+  ) -> Worker {
+    let _thread = thread::spawn(move || {
+      loop {
+        let job = receiver.lock().unwrap().recv().unwrap();
+        
+        println!("worker {} got a job; executing.", id);
+
+        job.call_box();
+      }
+    });
+
+    Worker {_thread}
+  }
+}
+
+/* 
+  ThreadPool
+*/
+
+struct ThreadPool {
+  _workers: Vec<Worker>,
+  sender: mpsc::Sender<Job>,
+}
+
+impl ThreadPool {
+  fn new(size: usize) -> ThreadPool {
+    let (sender, plain_receiver) = mpsc::channel();
+    
+    let receiver = Arc::new(Mutex::new(plain_receiver));
+
+    let _workers = (1..size).map(|i| { Worker::new(i, Arc::clone(&receiver)) }).collect();
+
+    ThreadPool {_workers, sender}
+  }
+  fn push(&self, f: Job) {
+    self.sender.send(f).unwrap();
+  }
+}
 
 fn handle_connection(mut stream: TcpStream) {
   let mut buffer = [0; 512];
   stream.read(&mut buffer).unwrap();
+  if buffer.starts_with(b"GET /sleep") {
+    thread::sleep(Duration::from_secs(5));
+  }
   let contents = r#"
     <!DOCTYPE html>
     <html lang="en">
@@ -24,8 +99,12 @@ fn handle_connection(mut stream: TcpStream) {
 
 fn main() {
   let listener = TcpListener::bind("127.0.0.1:7878").unwrap();
+  let pool = ThreadPool::new(5);
   for stream_res in listener.incoming() {
     let stream = stream_res.unwrap();
-    handle_connection(stream)
+    let x = Box::new(move || {
+      handle_connection(stream);
+    });
+    pool.push(x);
   }
 }
