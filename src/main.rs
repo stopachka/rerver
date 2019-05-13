@@ -1,3 +1,4 @@
+use std::io;
 use std::io::prelude::*;
 use std::net::TcpListener;
 use std::net::TcpStream;
@@ -70,13 +71,16 @@ impl ThreadPool {
     ThreadPool {_workers, sender}
   }
   fn push(&self, f: Job) {
-    self.sender.send(f).unwrap();
+    match self.sender.send(f) {
+      Ok(_) => println!("sent a job"),
+      Err(e) => println!("failed to send a job: {}", e),
+    }
   }
 }
 
-fn handle_connection(mut stream: TcpStream) {
+fn handle_connection(mut stream: TcpStream) -> Result<(), io::Error> {
   let mut buffer = [0; 512];
-  stream.read(&mut buffer).unwrap();
+  stream.read(&mut buffer)?;
   if buffer.starts_with(b"GET /sleep") {
     thread::sleep(Duration::from_secs(5));
   }
@@ -93,18 +97,28 @@ fn handle_connection(mut stream: TcpStream) {
     </body>
   </html>"#;
   let response = format!("HTTP/1.1 200 OK\r\nContent-Length: {}\r\n\r\n{}", contents.len(), contents);
-  stream.write(response.as_bytes()).unwrap();
-  stream.flush().unwrap();
+  stream.write(response.as_bytes())?;
+  stream.flush()?;
+
+  Ok(())
+}
+
+fn kickoff_server() -> Result<(), io::Error> {
+  let listener = TcpListener::bind("127.0.0.1:7878")?;
+  let pool = ThreadPool::new(10);
+  for stream_res in listener.incoming() {
+    let stream = stream_res?;
+    let x = Box::new(move || {
+      handle_connection(stream).unwrap();
+    });
+    pool.push(x);
+  }
+  Ok(())
 }
 
 fn main() {
-  let listener = TcpListener::bind("127.0.0.1:7878").unwrap();
-  let pool = ThreadPool::new(5);
-  for stream_res in listener.incoming() {
-    let stream = stream_res.unwrap();
-    let x = Box::new(move || {
-      handle_connection(stream);
-    });
-    pool.push(x);
+  match kickoff_server() {
+    Ok(_) => println!("server stopped"),
+    Err(e) => print!("error: {}", e),
   }
 }
