@@ -39,10 +39,8 @@ impl Worker {
   ) -> Worker {
     let _thread = thread::spawn(move || {
       loop {
-        let job = receiver.lock().unwrap().recv().unwrap();
-        
+        let job = receiver.lock().unwrap().recv().unwrap();    
         println!("worker {} got a job; executing.", id);
-
         job.call_box();
       }
     });
@@ -103,22 +101,30 @@ fn handle_connection(mut stream: TcpStream) -> Result<(), io::Error> {
   Ok(())
 }
 
-fn kickoff_server() -> Result<(), io::Error> {
-  let listener = TcpListener::bind("127.0.0.1:7878")?;
-  let pool = ThreadPool::new(10);
+fn handle_listener(listener: TcpListener, pool_size: usize) {
+  let pool = ThreadPool::new(pool_size);
   for stream_res in listener.incoming() {
-    let stream = stream_res?;
-    let x = Box::new(move || {
-      handle_connection(stream).unwrap();
-    });
-    pool.push(x);
+    match stream_res {
+      Ok(stream) => {
+        pool.push(
+          Box::new(
+            move || {
+              match handle_connection(stream) {
+                Ok(_) => println!("handled connection"),
+                Err(e) => println!("failed to handle connectiton: {}", e)
+              }
+            }
+          )
+        );
+      },
+      Err(e) => println!("failed to receive a stream: {}", e)
+    }
   }
-  Ok(())
 }
 
 fn main() {
-  match kickoff_server() {
-    Ok(_) => println!("server stopped"),
-    Err(e) => print!("error: {}", e),
+  match TcpListener::bind("127.0.0.1:7878") {
+    Ok(listener) => handle_listener(listener, 10),
+    Err(e) => println!("failed to bind: {}", e),
   }
 }
