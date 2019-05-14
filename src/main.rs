@@ -39,9 +39,14 @@ impl Worker {
   ) -> Worker {
     let _thread = thread::spawn(move || {
       loop {
-        let job = receiver.lock().unwrap().recv().unwrap();    
-        println!("worker {} got a job; executing.", id);
-        job.call_box();
+        let ch = receiver.lock().expect("failed to grab lock");
+        match ch.recv() {
+          Ok(job) => {
+            println!("worker {} got a job; executing.", id);
+            job.call_box()
+          },
+          Err(e) => println!("failed to receive a job: {}", e)
+        }
       }
     });
 
